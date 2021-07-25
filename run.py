@@ -6,7 +6,7 @@ from smac_rllib import RLlibStarCraft2Env
 from coma.trainer import COMATrainer
 
 if __name__ == '__main__':
-    ray.init(address='auto')
+    ray.init()
     env_config = {
         'map_name': '3m',
         "state_last_action": False,
@@ -22,12 +22,12 @@ if __name__ == '__main__':
 
     register_env('smac', smac_env_creator)
     register_trainable('coma', COMATrainer)
-    gamma = 0.99
     config = {
+        "log_level": "DEBUG",
         "use_coma": True,
         "lambda": 0.8,
         'seed': 1,
-        "gamma": gamma,
+        "gamma": 0.99,
         "min_iter_time_s": 1,
         "communication": False,
         "horizon": horizon,
@@ -56,11 +56,11 @@ if __name__ == '__main__':
         "critic_lr": 5e-4,
         'framework': 'torch',
         'env': 'smac',
-        'num_workers': 0,
+        'num_workers': 4,
         'num_cpus_per_worker': 2,
         'num_envs_per_worker': 1,
         'env_config': env_config,
-        'num_gpus': 0.0,
+        'num_gpus': 1,
         "entropy_coeff": 0.00,
         "tau": 1,
 
@@ -71,4 +71,4 @@ if __name__ == '__main__':
                  config=config,
                  metric='episode_reward_mean',
                  mode='max',
-                 )
+                 verbose=3)

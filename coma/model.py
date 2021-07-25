@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import gym
 import numpy as np
@@ -9,6 +9,7 @@ from ray.rllib.models.torch.misc import SlimFC, normc_initializer
 from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.policy.rnn_sequencing import \
     add_time_dimension as add_time_dimension_
+from ray.rllib.evaluation.postprocessing import Postprocessing
 from ray.rllib.policy.view_requirement import ViewRequirement
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.error import UnsupportedSpaceException
@@ -87,13 +88,14 @@ class COMATorchModel(TorchModelV2, nn.Module):
         self.nbr_actions = int(self.action_space.nvec[0])
         self.gru_cell_size = model_config.get("gru_cell_size")
 
-        self.inference_view_requirements.update(
+        self.view_requirements.update(
             {
                 SampleBatch.OBS: ViewRequirement(shift=0),
-                SampleBatch.PREV_ACTIONS: ViewRequirement(SampleBatch.ACTIONS,
-                                                          space=action_space,
-                                                          shift=-1),
-                SampleBatch.ACTIONS: ViewRequirement(space=action_space),
+                SampleBatch.NEXT_OBS: ViewRequirement(SampleBatch.OBS, shift=1, space=obs_space),
+                SampleBatch.PREV_ACTIONS: ViewRequirement(SampleBatch.ACTIONS, space=action_space, shift=-1),
+                Postprocessing.ADVANTAGES: ViewRequirement(),
+                Postprocessing.VALUE_TARGETS: ViewRequirement(),
+                SampleBatch.ACTIONS: ViewRequirement(),
                 "state_in_{}".format(0): ViewRequirement(
                     "state_out_{}".format(0),
                     space=Box(-1.0, -1.0,
@@ -239,8 +241,7 @@ class COMATorchModel(TorchModelV2, nn.Module):
         return x
 
     def forward(self, input_dict: Dict[str, TensorType],
-                state: List[TensorType], seq_lens: TensorType) -> (
-            TensorType, List[TensorType]):
+                state: List[TensorType], seq_lens: TensorType) -> Tuple[TensorType, List[TensorType]]:
         nbr_agents = self.nbr_agents
         cell_size = self.gru_cell_size
         obs = input_dict[SampleBatch.OBS]['obs']

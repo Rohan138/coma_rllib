@@ -38,7 +38,7 @@ DEFAULT_CONFIG = with_common_config({
     # If false the algorithm changes to Independent Actor Critic.
     "use_coma": True,
     "lambda": .9,
-    "gamma": .99,
+    "gamma": .95,
     "communication": True,
     # Max global norm for each gradient calculated by worker
     "grad_clip": 40.0,

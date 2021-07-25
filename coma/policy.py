@@ -10,8 +10,7 @@ from ray.rllib.models.modelv2 import ModelV2, restore_original_dimensions
 from ray.rllib.models.torch.torch_action_dist import TorchDistributionWrapper, \
     TorchMultiCategorical
 from ray.rllib.policy.sample_batch import SampleBatch
-from ray.rllib.policy.torch_policy_template import build_torch_policy
-from ray.rllib.policy.view_requirement import ViewRequirement
+from ray.rllib.policy.policy_template import build_policy_class
 from ray.rllib.utils.error import UnsupportedSpaceException
 from ray.rllib.utils.exploration import EpsilonGreedy as EpsilonGreedy_
 from ray.rllib.utils.framework import try_import_torch
@@ -21,6 +20,7 @@ from ray.rllib.utils.typing import TrainerConfigDict, TensorType
 
 import coma
 from coma.model import COMATorchModel, add_time_dimension
+from torch import distributions
 
 torch, nn = try_import_torch()
 
@@ -65,6 +65,7 @@ class COMATorchDist(TorchMultiCategorical):
         inputs_split = self.inputs.split(tuple(model.action_space.nvec), dim=1)
         self.cats = [torch.distributions.categorical.Categorical(logits=input_)
                      for input_ in inputs_split]
+        self.action_space = model.action_space
 
 
 def make_model_and_action_dist(policy: Policy,
@@ -114,8 +115,6 @@ def validate_spaces(policy: Policy, observation_space: gym.Space,
     if not isinstance(observation_space, gym.spaces.Box):
         raise UnsupportedSpaceException("Observation space must be a box.")
 
-    # TODO: check the action_space nvec.
-
 
 def make_coma_optimizers(policy: Policy, config: TrainerConfigDict):
     policy._actor_optimizer = torch.optim.RMSprop(
@@ -144,7 +143,7 @@ def stats(policy, train_batch):
             "q_value_loss": policy.critic_loss.item(),
             "entropy": policy.entropy.item(),
         },
-        **policy.exploration.get_info(),
+        **policy.exploration.get_state(),
     }
 
 
@@ -185,25 +184,23 @@ def compute_target(policy,
 def loss_fn(policy: Policy, model: ModelV2,
             dist_class: TorchDistributionWrapper, sample_batch: SampleBatch):
     max_seq_len = sample_batch['seq_lens'].max().item()
-    mask = sequence_mask(sample_batch['seq_lens'], max_seq_len,
-                         time_major=model.is_time_major()).view((-1, 1))
+    mask = sequence_mask(sample_batch['seq_lens'], max_seq_len, time_major=model.is_time_major()).reshape((-1, 1))
     mean_reg = sample_batch['seq_lens'].sum() * model.nbr_agents
     actions = sample_batch['actions'].view(
         (sample_batch['actions'].shape[0], model.nbr_agents, -1))[:, :, :1].to(
-        torch.long)
+torch.long)
     actions = add_time_dimension(actions, max_seq_len=max_seq_len,
                                  framework='torch', time_major=True).reshape_as(
         actions)
 
     logits_pi, _ = model(sample_batch,
-                         [sample_batch['state_in_0'], ],
+                         [sample_batch['state_in_0'],],
                          sample_batch['seq_lens'])
     logits_pi = logits_pi.view((logits_pi.shape[0], model.nbr_agents, -1))
     logits_pi_action = logits_pi[:, :, :model.nbr_actions]
     log_pi_action = nn.functional.log_softmax(logits_pi_action, dim=-1)
     pi_action = torch.exp(log_pi_action)
-    log_pi_action_selected = torch.gather(log_pi_action, -1, actions).squeeze(
-        -1)
+    log_pi_action_selected = torch.gather(log_pi_action, -1, actions).squeeze(-1)
 
     q_values = model.q_values(sample_batch, target=False)
     q_values = add_time_dimension(q_values, max_seq_len=max_seq_len,
@@ -236,34 +233,10 @@ def loss_fn(policy: Policy, model: ModelV2,
     return pi_loss, policy.critic_loss
 
 
-def view_requirements_fn(policy: Policy) -> Dict[str, ViewRequirement]:
-    """Function defining the view requirements for training/postprocessing.
-
-    These go on top of the Policy's Model's own view requirements used for
-    the action computing forward passes.
-
-    Args:
-        policy (Policy): The Policy that requires the returned
-            ViewRequirements.
-
-    Returns:
-        Dict[str, ViewRequirement]: The Policy's view requirements.
-    """
-    ret = {
-        SampleBatch.NEXT_OBS: ViewRequirement(
-            SampleBatch.OBS, shift=1, used_for_training=False),
-        Postprocessing.ADVANTAGES: ViewRequirement(shift=0),
-        Postprocessing.VALUE_TARGETS: ViewRequirement(shift=0),
-    }
-    return ret
-
-
 def setup_late_mixins(policy: Policy, obs_space: gym.spaces.Space,
                       action_space: gym.spaces.Space,
                       config: TrainerConfigDict) -> None:
-    """Call all mixin classes' constructors before SimpleQTorchPolicy
-    initialization.
-
+    """Call all mixin classes' constructors 
     Args:
         policy (Policy): The Policy object.
         obs_space (gym.spaces.Space): The Policy's observation space.
@@ -289,15 +262,20 @@ def apply_grad_clipping(policy, optimizer, loss):
                 info["grad_gnorm"] = grad_gnorm
     return info
 
+def disable_dummy_init(policy: Policy, obs_space, action_space, config) -> None:
+    def f(auto_remove_unneeded_view_reqs=True, stats_fn=None):
+        return None
+    policy._initialize_loss_from_dummy_batch = f
 
-COMATorchPolicy = build_torch_policy(
+COMATorchPolicy = build_policy_class(
     name="COMATorchPolicy",
+    framework="torch",
     make_model_and_action_dist=make_model_and_action_dist,
+    before_loss_init=disable_dummy_init,
     postprocess_fn=compute_target,
     optimizer_fn=make_coma_optimizers,
     validate_spaces=validate_spaces,
     get_default_config=lambda: coma.trainer.DEFAULT_CONFIG,
-    view_requirements_fn=view_requirements_fn,
     mixins=[TargetNetworkMixin, ],
     after_init=setup_late_mixins,
     extra_grad_process_fn=apply_grad_clipping,
