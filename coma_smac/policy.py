@@ -18,8 +18,8 @@ from ray.rllib.utils.torch_ops import convert_to_torch_tensor, \
     convert_to_non_torch_type, sequence_mask, FLOAT_MIN
 from ray.rllib.utils.typing import TrainerConfigDict, TensorType
 
-import coma
-from coma.model import COMATorchModel, add_time_dimension
+import coma_smac
+from coma_smac.model import COMATorchModel, add_time_dimension
 from torch import distributions
 
 torch, nn = try_import_torch()
@@ -275,7 +275,7 @@ COMATorchPolicy = build_policy_class(
     postprocess_fn=compute_target,
     optimizer_fn=make_coma_optimizers,
     validate_spaces=validate_spaces,
-    get_default_config=lambda: coma.trainer.DEFAULT_CONFIG,
+    get_default_config=lambda: coma_smac.trainer.DEFAULT_CONFIG,
     mixins=[TargetNetworkMixin, ],
     after_init=setup_late_mixins,
     extra_grad_process_fn=apply_grad_clipping,

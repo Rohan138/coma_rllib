@@ -14,7 +14,7 @@ from ray.rllib.execution.rollout_ops import ParallelRollouts
 from ray.rllib.execution.train_ops import TrainOneStep
 from ray.rllib.utils.typing import SampleBatchType
 
-from coma.policy import COMATorchPolicy, EpsilonCOMA
+from coma_smac.policy import COMATorchPolicy, EpsilonCOMA
 
 logger = logging.getLogger(__name__)
 

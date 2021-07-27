@@ -20,7 +20,6 @@ from ray.rllib.utils.typing import TrainerConfigDict, TensorType
 
 import coma
 from coma.model import COMATorchModel, add_time_dimension
-from torch import distributions
 
 torch, nn = try_import_torch()
 
@@ -45,7 +44,7 @@ class EpsilonCOMA(EpsilonGreedy_):
             # Get the current epsilon.
             epsilon = self.epsilon_schedule(self.last_timestep)
             logits = logits.view(batch_size * nbr_agents, nbr_actions)
-            proba = torch.nn.functional.softmax(logits, -1)
+            proba = nn.functional.softmax(logits, -1)
             new_proba = (1 - epsilon) * proba + epsilon / (
                     logits > FLOAT_MIN).sum(-1, keepdims=True).float()
             new_proba = torch.where(logits <= FLOAT_MIN, new_proba.new_zeros(1),
@@ -70,7 +69,7 @@ class COMATorchDist(TorchMultiCategorical):
 
 def make_model_and_action_dist(policy: Policy,
                                observation_space: gym.spaces.Space,
-                               action_space: gym.spaces.Space,
+                               action_space: gym.spaces.MultiDiscrete,
                                config: TrainerConfigDict) -> Tuple[
     ModelV2, TorchDistributionWrapper]:
     model_config = copy.deepcopy(config['model'])
@@ -78,8 +77,7 @@ def make_model_and_action_dist(policy: Policy,
     model = COMATorchModel(observation_space,
                            action_space,
                            num_outputs=sum(action_space.nvec),
-                           model_config=model_config,
-                           communication=config.get('communication', True))
+                           model_config=model_config)
 
     return model, COMATorchDist
 
@@ -114,6 +112,8 @@ def validate_spaces(policy: Policy, observation_space: gym.Space,
                     config: TrainerConfigDict) -> None:
     if not isinstance(observation_space, gym.spaces.Box):
         raise UnsupportedSpaceException("Observation space must be a box.")
+    if not isinstance(action_space, gym.spaces.MultiDiscrete):
+        raise UnsupportedSpaceException("Action space must be a MultiDiscrete.")
 
 
 def make_coma_optimizers(policy: Policy, config: TrainerConfigDict):
