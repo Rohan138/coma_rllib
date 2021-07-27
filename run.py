@@ -3,7 +3,7 @@ from ray import tune
 from ray.tune.registry import register_trainable, register_env
 from smac_rllib import RLlibStarCraft2Env
 
-from coma.trainer import COMATrainer
+from coma_smac.trainer import COMATrainer
 
 if __name__ == '__main__':
     ray.init()
@@ -23,7 +23,7 @@ if __name__ == '__main__':
     register_env('smac', smac_env_creator)
     register_trainable('coma', COMATrainer)
     config = {
-        "log_level": "DEBUG",
+        "log_level": "WARN",
         "use_coma": True,
         "lambda": 0.8,
         'seed': 1,
