@@ -1,19 +1,20 @@
 import logging
+import time
 from typing import List
-from coma_smac.model import COMATorchModel
+
 import numpy as np
-
 from ray.rllib import SampleBatch
-from ray.rllib.utils.exploration import EpsilonGreedy
-from ray.rllib.utils import merge_dicts
-from ray.rllib.agents.trainer import with_common_config, COMMON_CONFIG
+from ray.rllib.agents.trainer import with_common_config
 from ray.rllib.agents.trainer_template import build_trainer
-from ray.rllib.execution.common import _get_shared_metrics, NUM_TARGET_UPDATES
+from ray.rllib.evaluation import collect_metrics
+from ray.rllib.execution.common import _check_sample_batch_type, \
+    _get_shared_metrics, SAMPLE_TIMER, NUM_TARGET_UPDATES
 from ray.rllib.execution.metric_ops import StandardMetricsReporting
-from ray.rllib.execution.rollout_ops import ConcatBatches, ParallelRollouts
+from ray.rllib.execution.rollout_ops import ParallelRollouts
 from ray.rllib.execution.train_ops import TrainOneStep
+from ray.rllib.utils.typing import SampleBatchType
 
-from coma.policy import COMATorchPolicy, EpsilonCOMA
+from coma_mpe.policy import COMATorchPolicy, EpsilonCOMA
 
 logger = logging.getLogger(__name__)
 
@@ -21,41 +22,45 @@ LAST_ITER_UPDATE = "last_iter_update"
 NUM_ITER_LOOP = "num_iter_loop"
 
 
+def evaluate(trainer, worker_set):
+    episodes = []
+    for _ in range(trainer.config["evaluation_num_episodes"]):
+        episodes.append(worker_set.local_worker().sample())
+    metric = collect_metrics(worker_set.local_worker())
+    return metric
+
+
 # yapf: disable
 # --__sphinx_doc_begin__
 DEFAULT_CONFIG = with_common_config({
-    # === Settings for each individual policy ===
-    # ID of the agent controlled by this policy
-    "agent_id": None,
     # If false the algorithm changes to Independent Actor Critic.
     "use_coma": True,
-
-    # Config
-    "log_level": "DEBUG",
-    "framework": "torch",
-    'num_workers': 4,
-    'num_envs_per_worker': 4,
-    'num_gpus': 0,
-
-    # Training
-    "actor_lr": 5e-4,
-    "critic_lr": 5e-4,
     "lambda": .9,
     "gamma": .95,
+    "communication": True,
     # Max global norm for each gradient calculated by worker
-    "grad_clip": 100.0,
-    'target_network_update_freq': 1,
-    "rollout_fragment_length": 100,
-    "train_batch_size": 1024,
-    "timesteps_per_iteration": 0,
+    "grad_clip": 40.0,
+    'target_network_update_freq': 50,
+    # ModelConf
+    "rollout_fragment_length": 1,
+    "num_episodes": 8,
+    "_use_trajectory_view_api": True,
+    "batch_mode": "complete_episodes",
+    "nbr_agents": None,
     "model": {
-        "custom_model": COMATorchModel,
+        "use_lstm": True,
+        '_time_major': True,
         "custom_model_config": {
-            "actor_hiddens" : [64, 64],
-            "actor_activation": "ReLU",
-            "critic_hiddens": [128, 128],
-            "critic_activation": "ReLU",
-        }
+            "gru_cell_size": 64,
+            "fcnet_activation_stage1": "relu",
+            "fcnet_activation_stage2": "relu",
+            "fcnet_hiddens_stage1": [64, ],
+            "fcnet_hiddens_stage2": [],
+            "fcnet_hiddens_critic": [128, 128],
+            "fcnet_activation_critic": "relu",
+        },
+        "max_seq_len": 200,
+
     },
     "exploration_config": {
         "type": EpsilonCOMA,
@@ -63,23 +68,59 @@ DEFAULT_CONFIG = with_common_config({
         "final_epsilon": 0.01,
         "epsilon_timesteps": int(100000)
     },
-
-    "training_intensity": None,
-    # Force lockstep replay mode for MADDPG.
-    "multiagent": merge_dicts(COMMON_CONFIG["multiagent"], {
-        "replay_mode": "lockstep",
-    }),
-
+    "actor_lr": 5e-4,
+    "critic_lr": 5e-4,
+    # "log_level": "DEBUG",
+    "framework": "torch",
     "reward_range": None,
     "entropy_coeff": 0.0,
     "tau": 1,
-    "n_step": 1,
-    "evaluation_interval": None,
-    "evaluation_num_episodes": 10,
+    "timesteps_per_iteration": 0,
+    'num_workers': 0,
+    'num_envs_per_worker': 1,
+    'num_gpus': 0.,
+    "custom_eval_function": evaluate,
+    "evaluation_interval": 100,
+    "evaluation_num_episodes": 200,
     "evaluation_config": {
         "explore": False,
     },
 })
+
+class ConcatEpisodes:
+    """Callable used to merge episodes for training.
+
+    Examples:
+        >>> rollouts = ConcatEpisodes(...)
+        >>> rollouts = rollouts.combine(ConcatEpisodes(num_episodes=8))
+        >>> print(next(rollouts).count)
+        8
+    """
+
+    def __init__(self, num_episodes):
+        self.num_episodes = num_episodes
+        self.buffer = []
+        self.count = 0
+        self.batch_start_time = None
+
+    def _on_fetch_start(self):
+        if self.batch_start_time is None:
+            self.batch_start_time = time.perf_counter()
+
+    def __call__(self, batch: SampleBatchType) -> List[SampleBatchType]:
+        _check_sample_batch_type(batch)
+        self.buffer.append(batch)
+        self.count += 1
+        if self.count >= self.num_episodes:
+            out = SampleBatch.concat_samples(self.buffer)
+            timer = _get_shared_metrics().timers[SAMPLE_TIMER]
+            timer.push(time.perf_counter() - self.batch_start_time)
+            timer.push_units_processed(self.count)
+            self.batch_start_time = None
+            self.buffer = []
+            self.count = 0
+            return [out]
+        return []
 
 
 class UpdateTargetNetwork:
@@ -126,8 +167,8 @@ def execution_plan(workers, config):
     rollouts = ParallelRollouts(workers, mode="bulk_sync")
 
     train_op = rollouts \
-        .combine(ConcatBatches(config["train_batch_size"], \
-            count_steps_by=config["multiagent"]["count_steps_by"])) \
+        .combine(ConcatEpisodes(
+        num_episodes=config["num_episodes"])) \
         .for_each(TrainOneStep(workers)) \
         .for_each(UpdateTargetNetwork(
         workers, config['target_network_update_freq']))

@@ -211,8 +211,6 @@ class COMATorchModel(TorchModelV2, nn.Module):
         agent_indexes = agent_indexes.expand(B, -1, -1)
 
         actions = input_dict[SampleBatch.ACTIONS]
-        if self.communication:
-            actions = actions.view((B, nbr_agents, nbr_agents))[:, :, 0]
         actions = nn.functional.one_hot(actions, self.nbr_actions)
         actions = actions.unsqueeze(1).repeat(1, nbr_agents, 1, 1)
         agent_mask = (1 - torch.eye(self.nbr_agents, dtype=actions.dtype,

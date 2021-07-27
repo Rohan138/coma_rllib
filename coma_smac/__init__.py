@@ -1,2 +1,2 @@
-from coma.trainer import COMATrainer
+from coma_smac.trainer import COMATrainer
 

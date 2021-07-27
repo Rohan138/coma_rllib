@@ -18,8 +18,8 @@ from ray.rllib.utils.torch_ops import convert_to_torch_tensor, \
     convert_to_non_torch_type, sequence_mask, FLOAT_MIN
 from ray.rllib.utils.typing import TrainerConfigDict, TensorType
 
-import coma
-from coma.model import COMATorchModel, add_time_dimension
+import coma_mpe
+from coma_mpe.model import COMATorchModel, add_time_dimension
 
 torch, nn = try_import_torch()
 
@@ -44,7 +44,7 @@ class EpsilonCOMA(EpsilonGreedy_):
             # Get the current epsilon.
             epsilon = self.epsilon_schedule(self.last_timestep)
             logits = logits.view(batch_size * nbr_agents, nbr_actions)
-            proba = nn.functional.softmax(logits, -1)
+            proba = torch.nn.functional.softmax(logits, -1)
             new_proba = (1 - epsilon) * proba + epsilon / (
                     logits > FLOAT_MIN).sum(-1, keepdims=True).float()
             new_proba = torch.where(logits <= FLOAT_MIN, new_proba.new_zeros(1),
@@ -69,7 +69,7 @@ class COMATorchDist(TorchMultiCategorical):
 
 def make_model_and_action_dist(policy: Policy,
                                observation_space: gym.spaces.Space,
-                               action_space: gym.spaces.MultiDiscrete,
+                               action_space: gym.spaces.Space,
                                config: TrainerConfigDict) -> Tuple[
     ModelV2, TorchDistributionWrapper]:
     model_config = copy.deepcopy(config['model'])
@@ -77,7 +77,8 @@ def make_model_and_action_dist(policy: Policy,
     model = COMATorchModel(observation_space,
                            action_space,
                            num_outputs=sum(action_space.nvec),
-                           model_config=model_config)
+                           model_config=model_config,
+                           communication=config.get('communication', True))
 
     return model, COMATorchDist
 
@@ -112,8 +113,6 @@ def validate_spaces(policy: Policy, observation_space: gym.Space,
                     config: TrainerConfigDict) -> None:
     if not isinstance(observation_space, gym.spaces.Box):
         raise UnsupportedSpaceException("Observation space must be a box.")
-    if not isinstance(action_space, gym.spaces.MultiDiscrete):
-        raise UnsupportedSpaceException("Action space must be a MultiDiscrete.")
 
 
 def make_coma_optimizers(policy: Policy, config: TrainerConfigDict):
@@ -159,8 +158,6 @@ def compute_target(policy,
     next_obs = restore_original_dimensions(
         convert_to_torch_tensor(sample_batch[SampleBatch.NEXT_OBS]),
         policy.model.obs_space, policy.framework)
-    sample_batch['battle_won'] = convert_to_non_torch_type(
-        next_obs['battle_won'])
     target_q_values = policy.model.q_values(sample_batch_, target=True)
     target_q_values = convert_to_non_torch_type(target_q_values)
     actions = sample_batch[SampleBatch.ACTIONS]
@@ -275,7 +272,7 @@ COMATorchPolicy = build_policy_class(
     postprocess_fn=compute_target,
     optimizer_fn=make_coma_optimizers,
     validate_spaces=validate_spaces,
-    get_default_config=lambda: coma.trainer.DEFAULT_CONFIG,
+    get_default_config=lambda: coma_mpe.trainer.DEFAULT_CONFIG,
     mixins=[TargetNetworkMixin, ],
     after_init=setup_late_mixins,
     extra_grad_process_fn=apply_grad_clipping,
