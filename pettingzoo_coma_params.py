@@ -1,5 +1,6 @@
 import ray
 from ray import tune
+from ray.tune import schedulers
 from ray.tune.registry import register_trainable, register_env
 import supersuit as ss
 import argparse
@@ -12,8 +13,8 @@ import numpy as np
 from coma_mpe.trainer import COMATrainer
 
 # Optimization
-from hyperopt import hp
-from ray.tune.suggest.hyperopt import HyperOptSearch
+from ray.tune.suggest.bohb import TuneBOHB
+from ray.tune.schedulers import HyperBandForBOHB
 
 def parse_args():
     # Environment
@@ -174,14 +175,12 @@ def main(args):
             # === Policy Config ===
             # --- Model ---
             "grad_clip": 100,
-            'target_network_update_freq': tune.choice([1, 5, 10, 20]),
-            "lambda": tune.choice([0.90, 0.95, 0.99]),
             "gamma": args.gamma,
             "model": {
                 "use_lstm": True,
                 '_time_major': True,
                 "custom_model_config": {
-                    "gru_cell_size": tune.choice([16, 32, 64]),
+                    "gru_cell_size": args.gru_fc,
                     "fcnet_activation_stage1": "relu",
                     "fcnet_activation_stage2": "relu",
                     "fcnet_hiddens_stage1": [args.actor_fc,],
@@ -193,28 +192,33 @@ def main(args):
             },
 
             # --- Optimization ---
-            "actor_lr": tune.choice([1e-2, 1e-3, 1e-4]),
-            "critic_lr": tune.choice([1e-2, 1e-3, 1e-4]),
+            "actor_lr": tune.loguniform(1e-4, 1e-2),
+            "critic_lr": tune.loguniform(1e-4, 1e-2),
+            'target_network_update_freq': tune.qlograndint(1, 20, 4),
+            "lambda": tune.quniform(0.90, 0.99, 0.01),
+            "tau": tune.quniform(0.90, 0.99, 0.01),
+
             "rollout_fragment_length": args.rollout_fragment_length,
             "train_batch_size": args.train_batch_size,
 
-            "tau": tune.choice([0.90, 0.95, 0.99]),
     
             # === Evaluation and rendering ===
             "evaluation_interval": args.eval_freq,
             "evaluation_num_episodes": args.eval_num_episodes,
         }
     
-    hyperopt_search = HyperOptSearch(metric="episode_reward_mean", mode="max")
+    search_alg = TuneBOHB(metric='episode_reward_mean', mode='max')
+    bohb = HyperBandForBOHB(metric='episode_reward_mean', mode='max', \
+        time_attr='episodes_total', max_t=args.num_episodes)
 
     tune.run(
         COMATrainer,
         name="COMA",
-        search_alg=hyperopt_search,
+        search_alg=search_alg,
+        scheduler=bohb,
+        num_samples=4,
         config=config,
         progress_reporter=CLIReporter(),
-        metric='episode_reward_mean',
-        mode='max',
         stop={
             "episodes_total": args.num_episodes,
         },
