@@ -11,6 +11,10 @@ import os
 import numpy as np
 from coma_mpe.trainer import COMATrainer
 
+# Optimization
+from hyperopt import hp
+from ray.tune.suggest.hyperopt import HyperOptSearch
+
 def parse_args():
     # Environment
     parser = argparse.ArgumentParser("RLLib COMA with PettingZoo environments")
@@ -50,6 +54,12 @@ def parse_args():
                         help="learning rate for critic Adam")
     parser.add_argument("--gamma", type=float, default=0.95,
                         help="discount factor")
+    parser.add_argument("--actor-fc", type=int, default=64,
+                        help="number of units in the actor mlp")
+    parser.add_argument("--critic-fc", type=int, default=128,
+                        help="number of units in the critic mlp")
+    parser.add_argument("--gru-fc", type=int, default=32,
+                        help="number of units in the actor gru")
     parser.add_argument("--lam", type=float, default=0.95,
                         help="lambda for TD(lambda)")
     parser.add_argument("--rollout-fragment-length", type=int, default=1,
@@ -164,40 +174,43 @@ def main(args):
             # === Policy Config ===
             # --- Model ---
             "grad_clip": 100,
-            'target_network_update_freq': args.update_freq,
-            "lambda": args.lam,
+            'target_network_update_freq': tune.choice([1, 5, 10, 20]),
+            "lambda": tune.choice([0.90, 0.95, 0.99]),
             "gamma": args.gamma,
             "model": {
                 "use_lstm": True,
                 '_time_major': True,
                 "custom_model_config": {
-                    "gru_cell_size": 32,
+                    "gru_cell_size": tune.choice([16, 32, 64]),
                     "fcnet_activation_stage1": "relu",
                     "fcnet_activation_stage2": "relu",
-                    "fcnet_hiddens_stage1": [64,],
+                    "fcnet_hiddens_stage1": [args.actor_fc,],
                     "fcnet_hiddens_stage2": [],
-                    "fcnet_hiddens_critic": [128, 128],
+                    "fcnet_hiddens_critic": [args.critic_fc] * 2,
                     "fcnet_activation_critic": "relu",
                 },
                 "max_seq_len": args.max_episode_len,
             },
 
             # --- Optimization ---
-            "actor_lr": args.actor_lr,
-            "critic_lr": args.critic_lr,
+            "actor_lr": tune.choice([1e-2, 1e-3, 1e-4]),
+            "critic_lr": tune.choice([1e-2, 1e-3, 1e-4]),
             "rollout_fragment_length": args.rollout_fragment_length,
             "train_batch_size": args.train_batch_size,
 
-            "tau": args.tau,
+            "tau": tune.choice([0.90, 0.95, 0.99]),
     
             # === Evaluation and rendering ===
             "evaluation_interval": args.eval_freq,
             "evaluation_num_episodes": args.eval_num_episodes,
         }
     
+    hyperopt_search = HyperOptSearch(metric="episode_reward_mean", mode="max")
+
     tune.run(
         COMATrainer,
         name="COMA",
+        search_alg=hyperopt_search,
         config=config,
         progress_reporter=CLIReporter(),
         metric='episode_reward_mean',

@@ -65,12 +65,12 @@ DEFAULT_CONFIG = with_common_config({
     "exploration_config": {
         "type": EpsilonCOMA,
         "initial_epsilon": 0.5,
-        "final_epsilon": 0.01,
-        "epsilon_timesteps": int(100000)
+        "final_epsilon": 0.05,
+        "epsilon_timesteps": int(200000)
     },
-    "actor_lr": 5e-4,
-    "critic_lr": 5e-4,
-    # "log_level": "DEBUG",
+    "actor_lr": 1e-2,
+    "critic_lr": 1e-2,
+    "log_level": "WARN",
     "framework": "torch",
     "reward_range": None,
     "entropy_coeff": 0.0,

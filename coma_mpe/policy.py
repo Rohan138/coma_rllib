@@ -1,4 +1,5 @@
 import copy
+from math import log2
 from typing import Tuple, Dict, Union
 
 import gym
@@ -86,6 +87,7 @@ def make_model_and_action_dist(policy: Policy,
 class TargetNetworkMixin:
     def __init__(self, obs_space: gym.spaces.Space,
                  action_space: gym.spaces.Space, config: TrainerConfigDict):
+
         # Hard initial update from Q-net(s) to target Q-net(s).
         self.update_target(tau=1.0)
 
@@ -116,20 +118,14 @@ def validate_spaces(policy: Policy, observation_space: gym.Space,
 
 
 def make_coma_optimizers(policy: Policy, config: TrainerConfigDict):
-    policy._actor_optimizer = torch.optim.RMSprop(
+    policy._actor_optimizer = torch.optim.Adam(
         params=policy.model.policy_variables(),
-        lr=config['actor_lr'],
-        alpha=0.99,
-        eps=1e-8,
-        weight_decay=0
+        lr=config['actor_lr']
     )
 
-    policy._critic_optimizer = torch.optim.RMSprop(
+    policy._critic_optimizer = torch.optim.Adam(
         params=policy.model.critic_variables(),
-        lr=config['critic_lr'],
-        alpha=0.99,
-        eps=1e-8,
-        weight_decay=0
+        lr=config['critic_lr']
     )
 
     return policy._actor_optimizer, policy._critic_optimizer
@@ -139,8 +135,9 @@ def stats(policy, train_batch):
     return {
         **{
             "actor_loss": policy.actor_loss.item(),
-            "q_value_loss": policy.critic_loss.item(),
+            "critic_loss": policy.critic_loss.item(),
             "entropy": policy.entropy.item(),
+            "relative_entropy": policy.entropy.item() / log2(policy.model.nbr_actions)
         },
         **policy.exploration.get_state(),
     }
